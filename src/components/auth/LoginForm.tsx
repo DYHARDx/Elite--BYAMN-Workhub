@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
-import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
-import { app } from "@/lib/firebase"; // make sure this points to your Firebase config
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "@/lib/firebase"; // tumhara existing firebase.ts import
 
 export default function LoginForm() {
-  const auth = getAuth(app);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -17,13 +16,13 @@ export default function LoginForm() {
     e.preventDefault();
     setError("");
 
-    // Basic validation
+    // Input validation
     if (!email.includes("@")) {
-      setError("Invalid email address");
+      setError("Please enter a valid email.");
       return;
     }
     if (password.length < 6) {
-      setError("Password must be at least 6 characters");
+      setError("Password must be at least 6 characters.");
       return;
     }
 
@@ -33,15 +32,24 @@ export default function LoginForm() {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       console.log("User logged in:", userCredential.user);
       // Redirect or show success
-      alert("Login successful!");
+      alert("Login successful!"); // Replace with your redirect logic
     } catch (err: any) {
       console.error(err);
-      if (err.code === "auth/user-not-found") {
-        setError("No user found with this email.");
-      } else if (err.code === "auth/wrong-password") {
-        setError("Incorrect password.");
-      } else {
-        setError("Failed to login. Please try again.");
+      switch (err.code) {
+        case "auth/user-not-found":
+          setError("No account found with this email.");
+          break;
+        case "auth/wrong-password":
+          setError("Incorrect password.");
+          break;
+        case "auth/too-many-requests":
+          setError("Too many attempts. Try again later.");
+          break;
+        case "auth/network-request-failed":
+          setError("Network error. Please check your connection.");
+          break;
+        default:
+          setError("Login failed. Please try again.");
       }
     } finally {
       setIsLoading(false);
@@ -51,7 +59,9 @@ export default function LoginForm() {
   return (
     <div className="max-w-md mx-auto mt-10 p-6 border rounded-lg shadow-md bg-white">
       <h2 className="text-2xl font-semibold mb-6 text-center">Login</h2>
+
       <form onSubmit={handleSubmit} className="space-y-4 relative">
+        {/* Email Field */}
         <div>
           <label className="block mb-1 font-medium">Email</label>
           <input
@@ -64,6 +74,7 @@ export default function LoginForm() {
           />
         </div>
 
+        {/* Password Field */}
         <div className="relative">
           <label className="block mb-1 font-medium">Password</label>
           <input
@@ -83,8 +94,10 @@ export default function LoginForm() {
           </button>
         </div>
 
+        {/* Error Message */}
         {error && <p className="text-red-500">{error}</p>}
 
+        {/* Submit Button */}
         <button
           type="submit"
           disabled={isLoading}
@@ -98,6 +111,14 @@ export default function LoginForm() {
           {isLoading ? "Logging in..." : "Login"}
         </button>
       </form>
+
+      {/* Optional: Forgot Password Link */}
+      <p className="mt-4 text-sm text-center text-gray-600">
+        Forgot your password?{" "}
+        <a href="/forgot-password" className="text-indigo-600 hover:underline">
+          Reset here
+        </a>
+      </p>
     </div>
   );
 }
