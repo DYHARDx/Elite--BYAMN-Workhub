@@ -43,6 +43,28 @@ bun run dev
 
 The application will be available at `http://localhost:5173`
 
+## Security Configuration
+
+This project uses Firebase for authentication and database storage. Security rules have been implemented to protect user data:
+
+- Users can only access their own data (profiles, wallets, transactions)
+- Campaign creators can manage their own campaigns
+- Admin users have additional privileges for managing users and approving requests
+- All database operations require authentication
+
+To deploy updated security rules:
+
+```sh
+# Install Firebase CLI if not already installed
+npm install -g firebase-tools
+
+# Login to Firebase
+bun run firebase:login
+
+# Deploy database security rules
+bun run firebase:deploy
+```
+
 ## Deployment
 
 This project is deployed on Vercel. For production builds:

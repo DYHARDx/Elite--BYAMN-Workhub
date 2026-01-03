@@ -1,0 +1,135 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        "email": {
+          ".validate": "newData.isString() && newData.val().matches(/^[^@]+@[^@]+\\.[^@]+$/)"
+        },
+        "fullName": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+        },
+        "role": {
+          ".validate": "newData.val() === 'user' || newData.val() === 'admin'"
+        },
+        "isBlocked": {
+          ".validate": "newData.isBoolean()"
+        }
+      }
+    },
+    
+    "wallets": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        "earnedBalance": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "addedBalance": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "pendingAddMoney": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "totalWithdrawn": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        }
+      }
+    },
+    
+    "campaigns": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$campaignId": {
+        ".write": "auth != null && (newData.child('creatorId').val() === auth.uid || data.child('creatorId').val() === auth.uid)",
+        "title": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"
+        },
+        "description": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 500"
+        },
+        "instructions": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 1000"
+        },
+        "rewardPerWorker": {
+          ".validate": "newData.isNumber() && newData.val() >= 0.5 && newData.val() <= 10000"
+        },
+        "totalWorkers": {
+          ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 1000000"
+        },
+        "totalBudget": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "remainingBudget": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "status": {
+          ".validate": "newData.val() === 'active' || newData.val() === 'completed' || newData.val() === 'paused'"
+        }
+      }
+    },
+    
+    "works": {
+      "$userId": {
+        "$workId": {
+          ".read": "auth != null",
+          ".write": "auth != null && auth.uid === $userId",
+          "campaignId": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "campaignTitle": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "status": {
+            ".validate": "newData.val() === 'pending' || newData.val() === 'approved' || newData.val() === 'rejected'"
+          },
+          "reward": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "proofUrl": {
+            ".validate": "newData.isString() && newData.val().matches(/^https?:\\/\\//)"
+          }
+        }
+      }
+    },
+    
+    "transactions": {
+      "$userId": {
+        "$transactionId": {
+          ".read": "auth != null && auth.uid === $userId",
+          ".write": "auth != null && auth.uid === $userId",
+          "type": {
+            ".validate": "newData.val() === 'add_money' || newData.val() === 'withdrawal' || newData.val() === 'earning' || newData.val() === 'campaign_spend'"
+          },
+          "amount": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "status": {
+            ".validate": "newData.val() === 'pending' || newData.val() === 'approved' || newData.val() === 'rejected' || newData.val() === 'paid'"
+          }
+        }
+      }
+    },
+    
+    "adminRequests": {
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+      ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+      "addMoney": {
+        "$requestId": {
+          ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+          ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'"
+        }
+      },
+      "withdrawals": {
+        "$requestId": {
+          ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+          ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'"
+        }
+      }
+    }
+  }
+}
