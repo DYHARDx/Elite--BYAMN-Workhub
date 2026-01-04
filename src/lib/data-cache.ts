@@ -1,5 +1,14 @@
 import { ref, get, runTransaction, update, push, set } from 'firebase/database';
 import { database } from './firebase';
+import {
+  validateWalletData,
+  validateCampaignData,
+  validateTransactionData,
+  validateUserAuthorization,
+  validateWorkData,
+  validateMoneyRequestData,
+  validateAmount
+} from './validation';
 
 // Cache configuration
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
@@ -199,14 +208,9 @@ export const dataCache = new DataCache();
 // Verify user authorization
 const verifyUserAuthorization = async (currentUserId: string, targetUserId: string, requiredRole?: 'admin'): Promise<boolean> => {
   try {
-    // Validate input parameters
-    if (!currentUserId || typeof currentUserId !== 'string') {
-      console.error('Invalid currentUserId provided for authorization check');
-      return false;
-    }
-    
-    if (!targetUserId || typeof targetUserId !== 'string') {
-      console.error('Invalid targetUserId provided for authorization check');
+    // Validate input parameters using the imported function
+    if (!validateUserAuthorization(currentUserId, targetUserId, requiredRole)) {
+      console.error('Invalid authorization parameters');
       return false;
     }
     
@@ -619,9 +623,9 @@ export const approveWorkAndCredit = async (
       throw new Error('Work is not in pending status');
     }
     
-    // Validate work data
-    if (typeof workData.reward !== 'number' || workData.reward <= 0 || workData.reward > 10000) {
-      throw new Error('Invalid reward in work data');
+    // Validate work data using imported validation function
+    if (!validateWorkData(workData)) {
+      throw new Error('Invalid work data');
     }
     
     // Update work status atomically
@@ -630,9 +634,9 @@ export const approveWorkAndCredit = async (
         return undefined; // Abort if work doesn't exist or is not pending
       }
       
-      // Validate work data during transaction
-      if (typeof currentData.reward !== 'number' || currentData.reward <= 0 || currentData.reward > 10000) {
-        console.error('Invalid reward in work data during transaction:', currentData);
+      // Validate work data during transaction using imported validation function
+      if (!validateWorkData(currentData)) {
+        console.error('Invalid work data during transaction:', currentData);
         return undefined; // Abort transaction
       }
       
@@ -972,9 +976,9 @@ export const applyToCampaign = async (
       reward,
     };
     
-    // Validate work data before creating
-    if (typeof workData.reward !== 'number' || workData.reward <= 0 || workData.reward > 10000) {
-      throw new Error('Invalid reward in work data');
+    // Validate work data before creating using imported validation function
+    if (!validateWorkData(workData)) {
+      throw new Error('Invalid work data');
     }
 
     await set(workRef, workData);
@@ -1048,9 +1052,9 @@ export const submitWorkForCampaign = async (
       throw new Error('Work has already been submitted and is awaiting review');
     }
     
-    // Validate work data
-    if (typeof workData.reward !== 'number' || workData.reward <= 0 || workData.reward > 10000) {
-      throw new Error('Invalid reward in work data');
+    // Validate work data using imported validation function
+    if (!validateWorkData(workData)) {
+      throw new Error('Invalid work data');
     }
 
     // Update work with proof
@@ -1118,9 +1122,9 @@ export const rejectWorkAndRestoreCampaignBudget = async (
       throw new Error('Work is not in pending status');
     }
     
-    // Validate work data
-    if (typeof workData.reward !== 'number' || workData.reward <= 0 || workData.reward > 10000) {
-      throw new Error('Invalid reward in work data');
+    // Validate work data using imported validation function
+    if (!validateWorkData(workData)) {
+      throw new Error('Invalid work data');
     }
 
     // Update work status to rejected
@@ -1154,6 +1158,17 @@ export const rejectWorkAndRestoreCampaignBudget = async (
   }
 };
 
+// Utility function to fetch time-based leaderboard data
+export const fetchTimeBasedLeaderboard = async (
+  period: 'daily' | 'weekly' | 'monthly'
+): Promise<any> => {
+  const cacheKey = `leaderboard:${period}`;
+  
+  // Check cache first
+  const cached = dataCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
 
 
 // Validation functions
@@ -1199,6 +1214,11 @@ const validateTransactionData = (data: any): data is any => {
     typeof data.createdAt === 'number' && data.createdAt >= 0
   );
 };
+
+
+// Validation functions
+
+
 
 // Utility functions for common data fetching operations
 export const fetchUserData = async (uid: string): Promise<any> => {
