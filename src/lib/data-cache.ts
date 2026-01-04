@@ -36,7 +36,7 @@ class DataCache {
   }
 
   // Get data from cache if it's still valid
-  get<T = any>(key: string): T | null {
+  get(key: string): any | null {
     try {
       const entry = this.cache.get(key);
       if (!entry) return null;
@@ -46,19 +46,29 @@ class DataCache {
         return null;
       }
 
-      return entry.data as T;
+      return entry.data;
     } catch (error) {
-      console.error(`Error getting cache entry for key ${key}:`, error);
+      console.error('Error getting data from cache:', error);
       return null;
     }
   }
 
   // Set data in cache
-  set<T = any>(key: string, data: T): void {
+  set(key: string, data: any): void {
     try {
       // Remove oldest entries if cache is full
       if (this.cache.size >= MAX_CACHE_SIZE) {
-        const oldestKey = this.cache.keys().next().value;
+        let oldestKey: string | undefined;
+        let oldestTime = Number.MAX_SAFE_INTEGER;
+        
+        // Find the least recently used item by checking timestamps
+        for (const [cacheKey, cacheEntry] of this.cache.entries()) {
+          if (cacheEntry.timestamp < oldestTime) {
+            oldestTime = cacheEntry.timestamp;
+            oldestKey = cacheKey;
+          }
+        }
+        
         if (oldestKey) {
           this.cache.delete(oldestKey);
         }
@@ -70,19 +80,27 @@ class DataCache {
         expiry: Date.now() + CACHE_DURATION,
       });
     } catch (error) {
-      console.error(`Error setting cache entry for key ${key}:`, error);
+      console.error('Error setting data in cache:', error);
     }
   }
 
   // Clear specific cache entry
   clear(key: string): void {
-    this.cache.delete(key);
+    try {
+      this.cache.delete(key);
+    } catch (error) {
+      console.error('Error clearing cache entry:', error);
+    }
   }
 
   // Clear all cache
   clearAll(): void {
-    this.cache.clear();
-    this.pendingRequests.clear();
+    try {
+      this.cache.clear();
+      this.pendingRequests.clear();
+    } catch (error) {
+      console.error('Error clearing all cache:', error);
+    }
   }
 
   // Check if data is being fetched
@@ -90,27 +108,27 @@ class DataCache {
     try {
       return this.pendingRequests.has(key);
     } catch (error) {
-      console.error(`Error checking pending request for key ${key}:`, error);
+      console.error('Error checking if data is being fetched:', error);
       return false;
     }
   }
 
   // Get pending request
-  getPending<T = any>(key: string): Promise<T> | undefined {
+  getPending(key: string): Promise<any> | undefined {
     try {
-      return this.pendingRequests.get(key) as Promise<T>;
+      return this.pendingRequests.get(key);
     } catch (error) {
-      console.error(`Error getting pending request for key ${key}:`, error);
+      console.error('Error getting pending request:', error);
       return undefined;
     }
   }
 
   // Set pending request
-  setPending<T = any>(key: string, promise: Promise<T>): void {
+  setPending(key: string, promise: Promise<any>): void {
     try {
-      this.pendingRequests.set(key, promise as Promise<any>);
+      this.pendingRequests.set(key, promise);
     } catch (error) {
-      console.error(`Error setting pending request for key ${key}:`, error);
+      console.error('Error setting pending request:', error);
     }
   }
 
@@ -119,13 +137,59 @@ class DataCache {
     try {
       this.pendingRequests.delete(key);
     } catch (error) {
-      console.error(`Error clearing pending request for key ${key}:`, error);
+      console.error('Error clearing pending request:', error);
+    }
+  }
+  
+  // Check if cache has expired entry
+  isExpired(key: string): boolean {
+    try {
+      const entry = this.cache.get(key);
+      if (!entry) return true;
+      
+      return Date.now() > entry.expiry;
+    } catch (error) {
+      console.error('Error checking if cache is expired:', error);
+      return true; // Default to expired if there's an error
+    }
+  }
+  
+  // Get or create pending request to prevent duplicate requests
+  getOrCreatePendingRequest<T>(key: string, createPromise: () => Promise<T>): Promise<T> {
+    try {
+      // Check if there's already a pending request for this key
+      const existingPromise = this.pendingRequests.get(key);
+      if (existingPromise) {
+        return existingPromise as Promise<T>;
+      }
+      
+      // Create a new promise
+      const newPromise = createPromise();
+      
+      // Store the promise to prevent duplicate requests
+      this.setPending(key, newPromise);
+      
+      // Clean up the pending request when it resolves or rejects
+      newPromise.finally(() => {
+        this.clearPending(key);
+      });
+      
+      return newPromise;
+    } catch (error) {
+      console.error('Error in getOrCreatePendingRequest:', error);
+      // Return a rejected promise to maintain the expected return type
+      return Promise.reject(error) as Promise<T>;
     }
   }
   
   // Get all cache keys
   getCacheKeys(): string[] {
-    return Array.from(this.cache.keys());
+    try {
+      return Array.from(this.cache.keys());
+    } catch (error) {
+      console.error('Error getting cache keys:', error);
+      return [];
+    }
   }
 }
 
@@ -1203,40 +1267,28 @@ export const fetchUserData = async (uid: string): Promise<any> => {
   
   // Check cache first
   const cached = dataCache.get(cacheKey);
-  if (cached) {
+  if (cached && !dataCache.isExpired(cacheKey)) {
     return cached;
   }
 
-  // Check if already fetching
-  if (dataCache.isFetching(cacheKey)) {
-    return dataCache.getPending(cacheKey);
-  }
-
-  // Fetch data
-  const promise = get(ref(database, `users/${uid}`))
-    .then((snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        if (data) {
-          dataCache.set(cacheKey, data);
-          return data;
+  // Use race condition handling to prevent duplicate requests
+  return dataCache.getOrCreatePendingRequest(cacheKey, () => {
+    return get(ref(database, `users/${uid}`))
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data) {
+            dataCache.set(cacheKey, data);
+            return data;
+          }
         }
-      }
-      return null;
-    })
-    .catch((error: any) => {
-      console.error('Error fetching user data:', error);
-      if (error.code) {
-        throw new Error(`Failed to fetch user data: ${error.message}`);
-      }
-      throw new Error('Failed to fetch user data. Please try again later.');
-    })
-    .finally(() => {
-      dataCache.clearPending(cacheKey);
-    });
-
-  dataCache.setPending(cacheKey, promise);
-  return promise;
+        return null;
+      })
+      .catch((error) => {
+        console.error('Error fetching user data:', error);
+        throw error;
+      });
+  });
 };
 
 export const fetchWalletData = async (uid: string): Promise<any> => {
@@ -1249,40 +1301,28 @@ export const fetchWalletData = async (uid: string): Promise<any> => {
   
   // Check cache first
   const cached = dataCache.get(cacheKey);
-  if (cached) {
+  if (cached && !dataCache.isExpired(cacheKey)) {
     return cached;
   }
 
-  // Check if already fetching
-  if (dataCache.isFetching(cacheKey)) {
-    return dataCache.getPending(cacheKey);
-  }
-
-  // Fetch data
-  const promise = get(ref(database, `wallets/${uid}`))
-    .then((snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        if (data) {
-          dataCache.set(cacheKey, data);
-          return data;
+  // Use race condition handling to prevent duplicate requests
+  return dataCache.getOrCreatePendingRequest(cacheKey, () => {
+    return get(ref(database, `wallets/${uid}`))
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data) {
+            dataCache.set(cacheKey, data);
+            return data;
+          }
         }
-      }
-      return null;
-    })
-    .catch((error: any) => {
-      console.error('Error fetching wallet data:', error);
-      if (error.code) {
-        throw new Error(`Failed to fetch wallet data: ${error.message}`);
-      }
-      throw new Error('Failed to fetch wallet data. Please try again later.');
-    })
-    .finally(() => {
-      dataCache.clearPending(cacheKey);
-    });
-
-  dataCache.setPending(cacheKey, promise);
-  return promise;
+        return null;
+      })
+      .catch((error) => {
+        console.error('Error fetching wallet data:', error);
+        throw error;
+      });
+  });
 };
 
 export const fetchTransactions = async (uid: string): Promise<any> => {
@@ -1295,40 +1335,28 @@ export const fetchTransactions = async (uid: string): Promise<any> => {
   
   // Check cache first
   const cached = dataCache.get(cacheKey);
-  if (cached) {
+  if (cached && !dataCache.isExpired(cacheKey)) {
     return cached;
   }
 
-  // Check if already fetching
-  if (dataCache.isFetching(cacheKey)) {
-    return dataCache.getPending(cacheKey);
-  }
-
-  // Fetch data
-  const promise = get(ref(database, `transactions/${uid}`))
-    .then((snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        if (data) {
-          dataCache.set(cacheKey, data);
-          return data;
+  // Use race condition handling to prevent duplicate requests
+  return dataCache.getOrCreatePendingRequest(cacheKey, () => {
+    return get(ref(database, `transactions/${uid}`))
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data) {
+            dataCache.set(cacheKey, data);
+            return data;
+          }
         }
-      }
-      return [];
-    })
-    .catch((error: any) => {
-      console.error('Error fetching transactions:', error);
-      if (error.code) {
-        throw new Error(`Failed to fetch transactions: ${error.message}`);
-      }
-      throw new Error('Failed to fetch transactions. Please try again later.');
-    })
-    .finally(() => {
-      dataCache.clearPending(cacheKey);
-    });
-
-  dataCache.setPending(cacheKey, promise);
-  return promise;
+        return [];
+      })
+      .catch((error) => {
+        console.error('Error fetching transactions:', error);
+        throw error;
+      });
+  });
 };
 
 export const fetchCampaigns = async (): Promise<any> => {
@@ -1336,40 +1364,28 @@ export const fetchCampaigns = async (): Promise<any> => {
   
   // Check cache first
   const cached = dataCache.get(cacheKey);
-  if (cached) {
+  if (cached && !dataCache.isExpired(cacheKey)) {
     return cached;
   }
 
-  // Check if already fetching
-  if (dataCache.isFetching(cacheKey)) {
-    return dataCache.getPending(cacheKey);
-  }
-
-  // Fetch data
-  const promise = get(ref(database, `campaigns`))
-    .then((snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        if (data) {
-          dataCache.set(cacheKey, data);
-          return data;
+  // Use race condition handling to prevent duplicate requests
+  return dataCache.getOrCreatePendingRequest(cacheKey, () => {
+    return get(ref(database, `campaigns`))
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data) {
+            dataCache.set(cacheKey, data);
+            return data;
+          }
         }
-      }
-      return {};
-    })
-    .catch((error: any) => {
-      console.error('Error fetching campaigns:', error);
-      if (error.code) {
-        throw new Error(`Failed to fetch campaigns: ${error.message}`);
-      }
-      throw new Error('Failed to fetch campaigns. Please try again later.');
-    })
-    .finally(() => {
-      dataCache.clearPending(cacheKey);
-    });
-
-  dataCache.setPending(cacheKey, promise);
-  return promise;
+        return {};
+      })
+      .catch((error) => {
+        console.error('Error fetching campaigns:', error);
+        throw error;
+      });
+  });
 };
 
 export const fetchWorks = async (uid: string): Promise<any> => {
@@ -1382,40 +1398,28 @@ export const fetchWorks = async (uid: string): Promise<any> => {
   
   // Check cache first
   const cached = dataCache.get(cacheKey);
-  if (cached) {
+  if (cached && !dataCache.isExpired(cacheKey)) {
     return cached;
   }
 
-  // Check if already fetching
-  if (dataCache.isFetching(cacheKey)) {
-    return dataCache.getPending(cacheKey);
-  }
-
-  // Fetch data
-  const promise = get(ref(database, `works/${uid}`))
-    .then((snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        if (data) {
-          dataCache.set(cacheKey, data);
-          return data;
+  // Use race condition handling to prevent duplicate requests
+  return dataCache.getOrCreatePendingRequest(cacheKey, () => {
+    return get(ref(database, `works/${uid}`))
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data) {
+            dataCache.set(cacheKey, data);
+            return data;
+          }
         }
-      }
-      return {};
-    })
-    .catch((error: any) => {
-      console.error('Error fetching works:', error);
-      if (error.code) {
-        throw new Error(`Failed to fetch works: ${error.message}`);
-      }
-      throw new Error('Failed to fetch works. Please try again later.');
-    })
-    .finally(() => {
-      dataCache.clearPending(cacheKey);
-    });
-
-  dataCache.setPending(cacheKey, promise);
-  return promise;
+        return {};
+      })
+      .catch((error) => {
+        console.error('Error fetching works:', error);
+        throw error;
+      });
+  });
 };
 
 export const fetchAdminData = async (): Promise<any> => {
@@ -1423,48 +1427,36 @@ export const fetchAdminData = async (): Promise<any> => {
   
   // Check cache first
   const cached = dataCache.get(cacheKey);
-  if (cached) {
+  if (cached && !dataCache.isExpired(cacheKey)) {
     return cached;
   }
 
-  // Check if already fetching
-  if (dataCache.isFetching(cacheKey)) {
-    return dataCache.getPending(cacheKey);
-  }
-
-  // Fetch data
-  const promise = Promise.all([
-    get(ref(database, `users`)),
-    get(ref(database, `campaigns`)),
-    get(ref(database, `works`)),
-    get(ref(database, `adminRequests/addMoney`)),
-    get(ref(database, `adminRequests/withdrawals`)),
-  ])
-    .then(([users, campaigns, works, addMoneyRequests, withdrawalRequests]) => {
-      const result = {
-        users: users.exists() && users.val() ? users.val() : {},
-        campaigns: campaigns.exists() && campaigns.val() ? campaigns.val() : {},
-        works: works.exists() && works.val() ? works.val() : {},
-        addMoneyRequests: addMoneyRequests.exists() && addMoneyRequests.val() ? addMoneyRequests.val() : {},
-        withdrawalRequests: withdrawalRequests.exists() && withdrawalRequests.val() ? withdrawalRequests.val() : {},
-      };
-      
-      dataCache.set(cacheKey, result);
-      return result;
-    })
-    .catch((error: any) => {
-      console.error('Error fetching admin data:', error);
-      if (error.code) {
-        throw new Error(`Failed to fetch admin data: ${error.message}`);
-      }
-      throw new Error('Failed to fetch admin data. Please try again later.');
-    })
-    .finally(() => {
-      dataCache.clearPending(cacheKey);
-    });
-
-  dataCache.setPending(cacheKey, promise);
-  return promise;
+  // Use race condition handling to prevent duplicate requests
+  return dataCache.getOrCreatePendingRequest(cacheKey, () => {
+    return Promise.all([
+      get(ref(database, `users`)),
+      get(ref(database, `campaigns`)),
+      get(ref(database, `works`)),
+      get(ref(database, `adminRequests/addMoney`)),
+      get(ref(database, `adminRequests/withdrawals`)),
+    ])
+      .then(([users, campaigns, works, addMoneyRequests, withdrawalRequests]) => {
+        const result = {
+          users: users.exists() ? users.val() : {},
+          campaigns: campaigns.exists() ? campaigns.val() : {},
+          works: works.exists() ? works.val() : {},
+          addMoneyRequests: addMoneyRequests.exists() ? addMoneyRequests.val() : {},
+          withdrawalRequests: withdrawalRequests.exists() ? withdrawalRequests.val() : {},
+        };
+        
+        dataCache.set(cacheKey, result);
+        return result;
+      })
+      .catch((error) => {
+        console.error('Error fetching admin data:', error);
+        throw error;
+      });
+  });
 };
 
 // Utility to clear specific cache entries when data is updated
@@ -1504,88 +1496,77 @@ export const fetchTimeBasedLeaderboard = async (timeframe: 'daily' | 'weekly' | 
   
   // Check cache first
   const cached = dataCache.get(cacheKey);
-  if (cached) {
+  if (cached && !dataCache.isExpired(cacheKey)) {
     return cached;
   }
 
-  // Check if already fetching
-  if (dataCache.isFetching(cacheKey)) {
-    return dataCache.getPending(cacheKey);
-  }
-
-  // Fetch all user data to calculate leaderboard
-  const usersRef = ref(database, 'users');
-  
-  const promise = get(usersRef)
-    .then((snapshot) => {
-      if (!snapshot.exists()) {
-        return [];
-      }
-      
-      const users = snapshot.val();
-      if (!users) {
-        return [];
-      }
-      
-      // Calculate time thresholds based on timeframe
-      const now = Date.now();
-      let timeThreshold = 0;
-      
-      switch (timeframe) {
-        case 'daily':
-          timeThreshold = now - 24 * 60 * 60 * 1000; // 24 hours ago
-          break;
-        case 'weekly':
-          timeThreshold = now - 7 * 24 * 60 * 60 * 1000; // 7 days ago
-          break;
-        case 'monthly':
-          timeThreshold = now - 30 * 24 * 60 * 60 * 1000; // 30 days ago
-          break;
-      }
-      
-      // Convert users object to array and filter based on timeframe
-      const usersArray = Object.entries(users)
-        .filter(([uid, userData]: [string, any]) => {
-          // Filter based on timeframe if needed
-          // For now, we include all users but in a real implementation
-          // you would filter based on when they earned money or completed work
-          return userData && typeof userData === 'object';
-        })
-        .map(([uid, userData]: [string, any]) => ({
-          uid,
-          fullName: userData.fullName || userData.name || `User ${uid.substring(0, 8)}`,
-          profileImage: userData.profileImage || userData.avatar,
-          approvedWorks: userData.approvedWorks || 0,
-          earnedMoney: userData.earnedMoney || 0,
-        }));
-      
-      // Sort users by approved works (descending) and assign ranks
-      const sortedUsers = usersArray
-        .sort((a, b) => {
-          // Primary sort: approved works (descending)
-          if (b.approvedWorks !== a.approvedWorks) {
-            return b.approvedWorks - a.approvedWorks;
-          }
-          // Secondary sort: earned money (descending) as tiebreaker
-          return (b.earnedMoney || 0) - (a.earnedMoney || 0);
-        })
-        .map((user, index) => ({
-          ...user,
-          rank: index + 1,
-        }));
-      
-      // Cache the result
-      dataCache.set(cacheKey, sortedUsers);
-      return sortedUsers;
-    })
-    .catch((error) => {
-      console.error(`Error fetching ${timeframe} leaderboard:`, error);
-      throw error;
-    })
-    .finally(() => {
-      dataCache.clearPending(cacheKey);
-    });
-
-  dataCache.setPending(cacheKey, promise);
-  return promise;
+  // Use race condition handling to prevent duplicate requests
+  return dataCache.getOrCreatePendingRequest(cacheKey, () => {
+    return get(ref(database, 'users'))
+      .then((snapshot) => {
+        if (!snapshot.exists()) {
+          return [];
+        }
+        
+        const users = snapshot.val();
+        if (!users) {
+          return [];
+        }
+        
+        // Calculate time thresholds based on timeframe
+        const now = Date.now();
+        let timeThreshold = 0;
+        
+        switch (timeframe) {
+          case 'daily':
+            timeThreshold = now - 24 * 60 * 60 * 1000; // 24 hours ago
+            break;
+          case 'weekly':
+            timeThreshold = now - 7 * 24 * 60 * 60 * 1000; // 7 days ago
+            break;
+          case 'monthly':
+            timeThreshold = now - 30 * 24 * 60 * 60 * 1000; // 30 days ago
+            break;
+        }
+        
+        // Convert users object to array and filter based on timeframe
+        const usersArray = Object.entries(users)
+          .filter(([uid, userData]: [string, any]) => {
+            // Filter based on timeframe if needed
+            // For now, we include all users but in a real implementation
+            // you would filter based on when they earned money or completed work
+            return userData && typeof userData === 'object';
+          })
+          .map(([uid, userData]: [string, any]) => ({
+            uid,
+            fullName: userData.fullName || userData.name || `User ${uid.substring(0, 8)}`,
+            profileImage: userData.profileImage || userData.avatar,
+            approvedWorks: userData.approvedWorks || 0,
+            earnedMoney: userData.earnedMoney || 0,
+          }));
+        
+        // Sort users by approved works (descending) and assign ranks
+        const sortedUsers = usersArray
+          .sort((a, b) => {
+            // Primary sort: approved works (descending)
+            if (b.approvedWorks !== a.approvedWorks) {
+              return b.approvedWorks - a.approvedWorks;
+            }
+            // Secondary sort: earned money (descending) as tiebreaker
+            return (b.earnedMoney || 0) - (a.earnedMoney || 0);
+          })
+          .map((user, index) => ({
+            ...user,
+            rank: index + 1,
+          }));
+        
+        // Cache the result
+        dataCache.set(cacheKey, sortedUsers);
+        return sortedUsers;
+      })
+      .catch((error) => {
+        console.error(`Error fetching ${timeframe} leaderboard:`, error);
+        throw error;
+      });
+  });
 };
