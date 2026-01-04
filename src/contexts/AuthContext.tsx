@@ -10,7 +10,22 @@ import {
 } from 'firebase/auth';
 import { ref, set, get, child, update } from 'firebase/database';
 import { auth, database } from '@/lib/firebase';
-import { sanitizeInput, isValidUrl } from '@/lib/utils';
+import { 
+  sanitizeInput, 
+  isValidUrl, 
+  validateUserProfile, 
+  isValidProfileImage, 
+  isValidName, 
+  isValidEmail,
+  isValidPassword,
+  validateAndSanitizeProfile
+} from '@/lib/utils';
+import { 
+  dataCache, 
+  fetchUserData, 
+  invalidateUserCache, 
+  clearUserCache 
+} from '@/lib/data-cache';
 
 interface UserProfile {
   uid: string;
@@ -62,11 +77,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (uid: string) => {
-    const snapshot = await get(child(ref(database), `users/${uid}`));
-    if (snapshot.exists()) {
-      setProfile(snapshot.val());
+    try {
+      const profileData = await fetchUserData(uid);
+      if (profileData) {
+        setProfile(profileData);
+      }
+      return profileData;
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+      return null;
     }
-    return snapshot.val();
   };
 
   const refreshProfile = async () => {
@@ -90,13 +110,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const signUp = async (email: string, password: string, fullName: string) => {
+    // Validate inputs before creating user
+    if (!isValidEmail(email)) {
+      throw new Error('Please enter a valid email address');
+    }
+    
+    if (!isValidPassword(password)) {
+      throw new Error('Password must be at least 6 characters and contain at least one letter and one number');
+    }
+    
+    if (!isValidName(fullName)) {
+      throw new Error('Full name must contain only letters, spaces, hyphens, and apostrophes, and be between 2-50 characters');
+    }
+
     const { user } = await createUserWithEmailAndPassword(auth, email, password);
     await sendEmailVerification(user);
     
     const newProfile: UserProfile = {
       uid: user.uid,
       email: email,
-      fullName: fullName,
+      fullName: sanitizeInput(fullName),
       bio: '',
       socialLinks: {},
       role: 'user',
@@ -118,10 +151,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       totalWithdrawn: 0,
     });
     
+    // Set profile in cache
+    dataCache.set(`user:${user.uid}`, newProfile);
+    
     setProfile(newProfile);
   };
 
   const signIn = async (email: string, password: string) => {
+    // Validate inputs before signing in
+    if (!isValidEmail(email)) {
+      throw new Error('Please enter a valid email address');
+    }
+    
+    if (!password || password.length < 1) {
+      throw new Error('Password cannot be empty');
+    }
+    
     await signInWithEmailAndPassword(auth, email, password);
   };
 
@@ -129,54 +174,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await signOut(auth);
     setUser(null);
     setProfile(null);
+    
+    // Clear user cache
+    if (user) {
+      clearUserCache(user.uid);
+    }
   };
 
   const resetPassword = async (email: string) => {
+    if (!isValidEmail(email)) {
+      throw new Error('Please enter a valid email address');
+    }
+    
     await sendPasswordResetEmail(auth, email);
   };
 
   const updateProfile = async (data: Partial<UserProfile>) => {
     if (!user) return;
     
-    // Sanitize profile data to prevent XSS and injection attacks
-    const sanitizedData: Partial<UserProfile> = {};
-    
-    if (data.fullName) {
-      sanitizedData.fullName = sanitizeInput(data.fullName);
+    // Validate and sanitize the profile data
+    const validation = validateAndSanitizeProfile(data);
+    if (!validation.isValid) {
+      throw new Error(validation.errors.join(', '));
     }
     
-    if (data.bio) {
-      sanitizedData.bio = sanitizeInput(data.bio);
-    }
-    
-    if (data.profileImage) {
-      // Validate URL before saving
-      if (isValidUrl(data.profileImage)) {
-        sanitizedData.profileImage = data.profileImage;
-      }
-    }
-    
-    if (data.socialLinks) {
-      sanitizedData.socialLinks = {};
-      
-      if (data.socialLinks.linkedin && isValidUrl(data.socialLinks.linkedin)) {
-        sanitizedData.socialLinks.linkedin = data.socialLinks.linkedin;
-      }
-      if (data.socialLinks.twitter && isValidUrl(data.socialLinks.twitter)) {
-        sanitizedData.socialLinks.twitter = data.socialLinks.twitter;
-      }
-      if (data.socialLinks.instagram && isValidUrl(data.socialLinks.instagram)) {
-        sanitizedData.socialLinks.instagram = data.socialLinks.instagram;
-      }
-      if (data.socialLinks.youtube && isValidUrl(data.socialLinks.youtube)) {
-        sanitizedData.socialLinks.youtube = data.socialLinks.youtube;
-      }
-      if (data.socialLinks.other && isValidUrl(data.socialLinks.other)) {
-        sanitizedData.socialLinks.other = data.socialLinks.other;
-      }
-    }
+    const sanitizedData = validation.sanitizedData;
     
     await update(ref(database, `users/${user.uid}`), sanitizedData);
+    
+    // Invalidate and update cache
+    invalidateUserCache(user.uid);
     await fetchProfile(user.uid);
   };
 
